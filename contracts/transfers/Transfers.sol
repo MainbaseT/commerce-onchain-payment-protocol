@@ -13,6 +13,7 @@ import {Commands as UniswapCommands} from "@uniswap/universal-router/contracts/l
 import {Constants as UniswapConstants} from "@uniswap/universal-router/contracts/libraries/Constants.sol";
 import "../interfaces/IWrappedNativeCurrency.sol";
 import "../interfaces/ITransfers.sol";
+import "../interfaces/IERC7597.sol";
 import "../utils/Sweepable.sol";
 import "../permit2/src/Permit2.sol";
 
@@ -75,7 +76,7 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
 
     // @dev Raises errors if the intent is invalid
     // @param _intent The intent to validate
-    modifier validIntent(TransferIntent calldata _intent) {
+    modifier validIntent(TransferIntent calldata _intent, address sender) {
         bytes32 hash = keccak256(
             abi.encodePacked(
                 _intent.recipientAmount,
@@ -87,7 +88,7 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
                 _intent.id,
                 _intent.operator,
                 block.chainid,
-                _msgSender(),
+                sender,
                 address(this)
             )
         );
@@ -149,7 +150,7 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
         override
         nonReentrant
         whenNotPaused
-        validIntent(_intent)
+        validIntent(_intent, _msgSender())
         operatorIsRegistered(_intent)
         exactValueSent(_intent)
     {
@@ -161,14 +162,14 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
             transferFundsToDestinations(_intent);
         }
 
-        succeedPayment(_intent, msg.value, NATIVE_CURRENCY);
+        succeedPayment(_intent, msg.value, NATIVE_CURRENCY, _msgSender());
     }
 
     // @inheritdoc ITransfers
     function transferToken(
         TransferIntent calldata _intent,
         Permit2SignatureTransferData calldata _signatureTransferData
-    ) external override nonReentrant whenNotPaused validIntent(_intent) operatorIsRegistered(_intent) {
+    ) external override nonReentrant whenNotPaused validIntent(_intent, _msgSender()) operatorIsRegistered(_intent) {
         // Make sure the recipient wants a token and the payer is sending it
         if (
             _intent.recipientCurrency == NATIVE_CURRENCY ||
@@ -212,7 +213,7 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
             transferFundsToDestinations(_intent);
         }
 
-        succeedPayment(_intent, neededAmount, _intent.recipientCurrency);
+        succeedPayment(_intent, neededAmount, _intent.recipientCurrency, _msgSender());
     }
 
     // @inheritdoc ITransfers
@@ -221,7 +222,7 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
         override
         nonReentrant
         whenNotPaused
-        validIntent(_intent)
+        validIntent(_intent, _msgSender())
         operatorIsRegistered(_intent)
     {
         // Make sure the recipient wants a token
@@ -257,7 +258,7 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
             transferFundsToDestinations(_intent);
         }
 
-        succeedPayment(_intent, neededAmount, _intent.recipientCurrency);
+        succeedPayment(_intent, neededAmount, _intent.recipientCurrency, _msgSender());
     }
 
     // @inheritdoc ITransfers
@@ -268,7 +269,7 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
         override
         nonReentrant
         whenNotPaused
-        validIntent(_intent)
+        validIntent(_intent, _msgSender())
         operatorIsRegistered(_intent)
         exactValueSent(_intent)
     {
@@ -285,7 +286,7 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
             transferFundsToDestinations(_intent);
         }
 
-        succeedPayment(_intent, msg.value, NATIVE_CURRENCY);
+        succeedPayment(_intent, msg.value, NATIVE_CURRENCY, _msgSender());
     }
 
     // @inheritdoc ITransfers
@@ -294,7 +295,7 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
     function unwrapAndTransfer(
         TransferIntent calldata _intent,
         Permit2SignatureTransferData calldata _signatureTransferData
-    ) external override nonReentrant whenNotPaused validIntent(_intent) operatorIsRegistered(_intent) {
+    ) external override nonReentrant whenNotPaused validIntent(_intent, _msgSender()) operatorIsRegistered(_intent) {
         // Make sure the recipient wants the native currency and that the payer is
         // sending the wrapped native currency
         if (
@@ -332,7 +333,7 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
             unwrapAndTransferFundsToDestinations(_intent);
         }
 
-        succeedPayment(_intent, neededAmount, address(wrappedNativeCurrency));
+        succeedPayment(_intent, neededAmount, address(wrappedNativeCurrency), _msgSender());
     }
 
     // @inheritdoc ITransfers
@@ -343,7 +344,7 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
         override
         nonReentrant
         whenNotPaused
-        validIntent(_intent)
+        validIntent(_intent, _msgSender())
         operatorIsRegistered(_intent)
     {
         // Make sure the recipient wants the native currency
@@ -372,7 +373,7 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
             unwrapAndTransferFundsToDestinations(_intent);
         }
 
-        succeedPayment(_intent, neededAmount, address(wrappedNativeCurrency));
+        succeedPayment(_intent, neededAmount, address(wrappedNativeCurrency), _msgSender());
     }
 
     /*------------------------------------------------------------------*\
@@ -386,7 +387,7 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
         override
         nonReentrant
         whenNotPaused
-        validIntent(_intent)
+        validIntent(_intent, _msgSender())
         operatorIsRegistered(_intent)
     {
         // Make sure a swap is actually required, otherwise the payer should use `wrapAndTransfer` or `transferNative`
@@ -396,14 +397,16 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
             revert IncorrectCurrency(NATIVE_CURRENCY);
         }
 
+        uint256 neededAmount = _intent.recipientAmount + _intent.feeAmount;
+
         uint256 amountSwapped = 0;
-        if (msg.value > 0) {
+        if (neededAmount > 0) {
             // Perform the swap
             amountSwapped = swapTokens(_intent, address(wrappedNativeCurrency), msg.value, poolFeesTier);
         }
 
         // Complete the payment
-        succeedPayment(_intent, amountSwapped, NATIVE_CURRENCY);
+        succeedPayment(_intent, amountSwapped, NATIVE_CURRENCY, _msgSender());
     }
 
     // @inheritdoc ITransfers
@@ -411,7 +414,7 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
         TransferIntent calldata _intent,
         Permit2SignatureTransferData calldata _signatureTransferData,
         uint24 poolFeesTier
-    ) external override nonReentrant whenNotPaused validIntent(_intent) operatorIsRegistered(_intent) {
+    ) external override nonReentrant whenNotPaused validIntent(_intent, _msgSender()) operatorIsRegistered(_intent) {
         IERC20 tokenIn = IERC20(_signatureTransferData.permit.permitted.token);
 
         // Make sure a swap is actually required
@@ -424,10 +427,11 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
             revert InvalidTransferDetails();
         }
 
+        uint256 neededAmount = _intent.recipientAmount + _intent.feeAmount;
         uint256 maxWillingToPay = _signatureTransferData.transferDetails.requestedAmount;
 
         uint256 amountSwapped = 0;
-        if (maxWillingToPay > 0) {
+        if (neededAmount > 0) {
             // Record our balance before (most likely zero) to detect fee-on-transfer tokens
             uint256 balanceBefore = tokenIn.balanceOf(address(this));
 
@@ -447,7 +451,7 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
         }
 
         // Complete the payment
-        succeedPayment(_intent, amountSwapped, address(tokenIn));
+        succeedPayment(_intent, amountSwapped, address(tokenIn), _msgSender());
     }
 
     // @inheritdoc ITransfers
@@ -456,7 +460,7 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
         address _tokenIn,
         uint256 maxWillingToPay,
         uint24 poolFeesTier
-    ) external override nonReentrant whenNotPaused validIntent(_intent) operatorIsRegistered(_intent) {
+    ) external override nonReentrant whenNotPaused validIntent(_intent, _msgSender()) operatorIsRegistered(_intent) {
         IERC20 tokenIn = IERC20(_tokenIn);
 
         // Make sure a swap is actually required
@@ -476,8 +480,10 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
             revert InsufficientAllowance(maxWillingToPay - allowance);
         }
 
+        uint256 neededAmount = _intent.recipientAmount + _intent.feeAmount;
+
         uint256 amountSwapped = 0;
-        if (maxWillingToPay > 0) {
+        if (neededAmount > 0) {
             // Record our balance before (most likely zero) to detect fee-on-transfer tokens
             uint256 balanceBefore = tokenIn.balanceOf(address(this));
 
@@ -492,7 +498,64 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
         }
 
         // Complete the payment
-        succeedPayment(_intent, amountSwapped, address(tokenIn));
+        succeedPayment(_intent, amountSwapped, address(tokenIn), _msgSender());
+    }
+
+    // @inheritdoc ITransfers
+    function subsidizedTransferToken(
+        TransferIntent calldata _intent,
+        EIP2612SignatureTransferData calldata _signatureTransferData
+    )
+        external
+        override
+        nonReentrant
+        whenNotPaused
+        validIntent(_intent, _signatureTransferData.owner)
+        operatorIsRegistered(_intent)
+    {
+        // Make sure the recipient wants a token
+        if (_intent.recipientCurrency == NATIVE_CURRENCY) {
+            revert IncorrectCurrency(_intent.recipientCurrency);
+        }
+
+        // Check the balance of the payer
+        IERC20 erc20 = IERC20(_intent.recipientCurrency);
+        uint256 neededAmount = _intent.recipientAmount + _intent.feeAmount;
+        uint256 payerBalance = erc20.balanceOf(_signatureTransferData.owner);
+        if (payerBalance < neededAmount) {
+            revert InsufficientBalance(neededAmount - payerBalance);
+        }
+
+        // Permit this contract to spend the payer's tokens
+        IERC7597(_intent.recipientCurrency).permit({
+            owner: _signatureTransferData.owner,
+            spender: address(this),
+            value: neededAmount,
+            deadline: _intent.deadline,
+            signature: _signatureTransferData.signature
+        });
+
+        // Check the payer has approved this contract for a sufficient transfer
+        uint256 allowance = erc20.allowance(_signatureTransferData.owner, address(this));
+        if (allowance < neededAmount) {
+            revert InsufficientAllowance(neededAmount - allowance);
+        }
+
+        if (neededAmount > 0) {
+            // Record our balance before (most likely zero) to detect fee-on-transfer tokens
+            uint256 balanceBefore = erc20.balanceOf(address(this));
+
+            // Transfer the payment token to this contract
+            erc20.safeTransferFrom(_signatureTransferData.owner, address(this), neededAmount);
+
+            // Make sure this is not a fee-on-transfer token
+            revertIfInexactTransfer(neededAmount, balanceBefore, erc20, address(this));
+
+            // Complete the payment
+            transferFundsToDestinations(_intent);
+        }
+
+        succeedPayment(_intent, neededAmount, _intent.recipientCurrency, _signatureTransferData.owner);
     }
 
     function swapTokens(
@@ -684,10 +747,11 @@ contract Transfers is Context, Ownable, Pausable, ReentrancyGuard, Sweepable, IT
     function succeedPayment(
         TransferIntent calldata _intent,
         uint256 spentAmount,
-        address spentCurrency
+        address spentCurrency,
+        address sender
     ) internal {
         processedTransferIntents[_intent.operator][_intent.id] = true;
-        emit Transferred(_intent.operator, _intent.id, _intent.recipient, _msgSender(), spentAmount, spentCurrency);
+        emit Transferred(_intent.operator, _intent.id, _intent.recipient, sender, spentAmount, spentCurrency);
     }
 
     function sendNative(

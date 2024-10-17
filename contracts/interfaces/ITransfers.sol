@@ -35,6 +35,11 @@ struct Permit2SignatureTransferData {
     bytes signature;
 }
 
+struct EIP2612SignatureTransferData {
+    address owner; // The owner of the funds
+    bytes signature; // The signature for the permit
+}
+
 // @title Transfers Contract
 // @notice Functions for making checked transfers between accounts
 interface ITransfers {
@@ -188,5 +193,13 @@ interface ITransfers {
         address _tokenIn,
         uint256 maxWillingToPay,
         uint24 poolFeesTier
+    ) external;
+
+    // @notice Allows the sender to pay for an intent with gasless transaction
+    // @param _intent The intent which describes the transfer
+    // @param _signatureTransferData The signed EIP-2612 permit data for the payment
+    function subsidizedTransferToken(
+        TransferIntent calldata _intent,
+        EIP2612SignatureTransferData calldata _signatureTransferData
     ) external;
 }
